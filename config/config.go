@@ -22,7 +22,6 @@ import (
 	"github.com/iotexproject/iotex-core/consensus/consensusfsm"
 	"github.com/iotexproject/iotex-core/pkg/keypair"
 	"github.com/iotexproject/iotex-core/pkg/log"
-	"github.com/iotexproject/iotex-core/pkg/unit"
 	"github.com/iotexproject/iotex-election/committee"
 )
 
@@ -116,7 +115,7 @@ var (
 			MaxGasLimitPerPool: 320000000,
 			MaxNumActsPerAcct:  2000,
 			ActionExpiry:       10 * time.Minute,
-			MinGasPriceStr:     big.NewInt(unit.Qev).String(),
+			MinGasPriceStr:     big.NewInt(0).String(),
 		},
 		Consensus: Consensus{
 			Scheme: StandaloneScheme,
