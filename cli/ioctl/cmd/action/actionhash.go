@@ -7,26 +7,22 @@
 package action
 
 import (
-	"context"
 	"fmt"
 	"math/big"
 	"strconv"
+	"time"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/golang/protobuf/ptypes"
-	"github.com/iotexproject/go-pkgs/crypto"
-	"github.com/iotexproject/iotex-address/address"
+	"github.com/iotexproject/iotex-antenna-go/iotx"
 	"github.com/iotexproject/iotex-proto/golang/iotexapi"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
 	"github.com/spf13/cobra"
-	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/iotexproject/iotex-core/cli/ioctl/cmd/alias"
 	"github.com/iotexproject/iotex-core/cli/ioctl/cmd/config"
 	"github.com/iotexproject/iotex-core/cli/ioctl/util"
-	"github.com/iotexproject/iotex-core/pkg/log"
 )
 
 // actionHashCmd represents the action hash command
@@ -46,33 +42,30 @@ var actionHashCmd = &cobra.Command{
 
 // getActionByHash gets action of IoTeX Blockchain by hash
 func getActionByHash(args []string) (string, error) {
-	hash := args[0]
-	conn, err := util.ConnectToEndpoint(config.ReadConfig.SecureConnect && !config.Insecure)
+	endpoint := config.ReadConfig.Endpoint
+	if endpoint == "" {
+		return "", fmt.Errorf(`use "ioctl config set endpoint" to config endpoint first`)
+	}
+
+	conn, err := iotx.NewIotx(endpoint, config.ReadConfig.SecureConnect && !config.Insecure)
 	if err != nil {
 		return "", err
 	}
 	defer conn.Close()
-	cli := iotexapi.NewAPIServiceClient(conn)
-	ctx := context.Background()
 
+	hash := args[0]
 	// search action on blockchain
-	requestGetActionByHash := &iotexapi.GetActionByHashRequest{
-		ActionHash:   hash,
-		CheckPending: false,
-	}
 	requestGetAction := iotexapi.GetActionsRequest{
 		Lookup: &iotexapi.GetActionsRequest_ByHash{
-			ByHash: requestGetActionByHash,
+			ByHash: &iotexapi.GetActionByHashRequest{
+				ActionHash:   hash,
+				CheckPending: false,
+			},
 		},
 	}
-	response, err := cli.GetActions(ctx, &requestGetAction)
+	response, err := conn.GetActions(&requestGetAction)
 	if err != nil {
-		// search action in action pool
-		requestGetActionByHash.CheckPending = true
-		response, err = cli.GetActions(ctx, &requestGetAction)
-		if err != nil {
-			return "", err
-		}
+		return "", err
 	}
 	if len(response.ActionInfo) == 0 {
 		return "", fmt.Errorf("no action info returned")
@@ -83,8 +76,10 @@ func getActionByHash(args []string) (string, error) {
 	}
 	fmt.Println(output)
 
-	requestGetReceipt := &iotexapi.GetReceiptByActionRequest{ActionHash: hash}
-	responseReceipt, err := cli.GetReceiptByAction(ctx, requestGetReceipt)
+	responseReceipt, err := conn.GetReceiptByAction(
+		&iotexapi.GetReceiptByActionRequest{
+			ActionHash: hash,
+	})
 	if err != nil {
 		sta, ok := status.FromError(err)
 		if ok && sta.Code() == codes.NotFound {
@@ -94,7 +89,7 @@ func getActionByHash(args []string) (string, error) {
 		}
 		return "", err
 	}
-	return "\n#This action has been written on blockchain\n" +
+	return "#This action has been written on blockchain\n" +
 		printReceiptProto(responseReceipt.ReceiptInfo.Receipt), nil
 }
 
@@ -103,35 +98,21 @@ func printAction(actionInfo *iotexapi.ActionInfo) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	output += fmt.Sprintf("sender: %s %s\n", actionInfo.Sender,
+		Match(actionInfo.Sender, "address"))
 	if actionInfo.Timestamp != nil {
-		ts, err := ptypes.Timestamp(actionInfo.Timestamp)
-		if err != nil {
-			return "", err
-		}
-		output += fmt.Sprintf("timeStamp: %d\n", ts.Unix())
+		ts := time.Unix(actionInfo.Timestamp.Seconds, int64(actionInfo.Timestamp.Nanos)).UTC()
+		output += fmt.Sprintf("timeStamp: %s\n", ts.String())
 		output += fmt.Sprintf("blkHash: %s\n", actionInfo.BlkHash)
 	}
-	output += fmt.Sprintf("actHash: %s\n", actionInfo.ActHash)
 	return output, nil
 }
 
 func printActionProto(action *iotextypes.Action) (string, error) {
-	pubKey, err := crypto.BytesToPublicKey(action.SenderPubKey)
-	if err != nil {
-		log.L().Error("failed to convert pubkey", zap.Error(err))
-		return "", err
-	}
-	senderAddress, err := address.FromBytes(pubKey.Hash())
-	if err != nil {
-		log.L().Error("failed to convert bytes into address", zap.Error(err))
-		return "", err
-	}
 	output := fmt.Sprintf("\nversion: %d  ", action.Core.GetVersion()) +
 		fmt.Sprintf("nonce: %d  ", action.Core.GetNonce()) +
 		fmt.Sprintf("gasLimit: %d  ", action.Core.GasLimit) +
-		fmt.Sprintf("gasPrice: %s Rau\n", action.Core.GasPrice) +
-		fmt.Sprintf("senderAddress: %s %s\n", senderAddress.String(),
-			Match(senderAddress.String(), "address"))
+		fmt.Sprintf("gasPrice: %s Rau\n", action.Core.GasPrice)
 	switch {
 	default:
 		output += proto.MarshalTextString(action.Core)
@@ -188,7 +169,7 @@ func printReceiptProto(receipt *iotextypes.Receipt) string {
 		fmt.Sprintf("gasConsumed: %d\n", receipt.GasConsumed) +
 		fmt.Sprintf("logs: %d", len(receipt.Logs))
 	if len(receipt.ContractAddress) != 0 {
-		output += fmt.Sprintf("\ncontractAddress: %s %s", receipt.ContractAddress,
+		output += fmt.Sprintf("\ncontractAddress: %s %s\n", receipt.ContractAddress,
 			Match(receipt.ContractAddress, "address"))
 	}
 	return output
