@@ -146,6 +146,7 @@ var (
 				SuggestBlockWindow: 20,
 				DefaultGas:         uint64(unit.Qev),
 				Percentile:         60,
+				ActionGasLimit:     8000000,
 			},
 			RangeQueryLimit: 1000,
 		},
@@ -266,6 +267,7 @@ type (
 		SuggestBlockWindow int    `yaml:"suggestBlockWindow"`
 		DefaultGas         uint64 `yaml:"defaultGas"`
 		Percentile         int    `yaml:"Percentile"`
+		ActionGasLimit     uint64 `yaml:"actionGasLimit"`
 	}
 
 	// System is the system config

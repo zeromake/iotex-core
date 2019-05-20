@@ -102,6 +102,11 @@ func (gs *GasStation) EstimateGasForAction(actPb *iotextypes.Action) (uint64, er
 	return gas, nil
 }
 
+// ActionGasLimit returns the action gas limit
+func (gs *GasStation) ActionGasLimit() uint64 {
+	return gs.cfg.GasStation.ActionGasLimit
+}
+
 type bigIntArray []*big.Int
 
 func (s bigIntArray) Len() int           { return len(s) }

@@ -190,6 +190,7 @@ func New(
 
 	var apiSvr *api.Server
 	if _, ok := cfg.Plugins[config.GatewayPlugin]; ok {
+		cfg.API.GasStation.ActionGasLimit = cfg.Genesis.ActionGasLimit
 		apiSvr, err = api.NewServer(
 			cfg.API,
 			chain,

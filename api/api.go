@@ -330,12 +330,19 @@ func (api *Server) ReadContract(ctx context.Context, in *iotexapi.ReadContractRe
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	intrinsicGas, err := sc.IntrinsicGas()
+	caller, err := api.bc.StateByAddr(in.CallerAddress)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	sc, _ = action.NewExecution(sc.Contract(), sc.Nonce(), sc.Amount(), intrinsicGas, sc.GasPrice(), sc.Data())
+	sc, _ = action.NewExecution(
+		sc.Contract(),
+		caller.Nonce+1,
+		sc.Amount(),
+		api.gs.ActionGasLimit(),
+		big.NewInt(0),
+		sc.Data(),
+	)
 
 	callerAddr, err := address.FromString(in.CallerAddress)
 	if err != nil {
