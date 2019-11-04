@@ -19,8 +19,8 @@ type Iterator interface {
 
 // LeafIterator defines an iterator to go through all the leaves under given node
 type LeafIterator struct {
-	tr    Trie
-	stack []Node
+	tr      Trie
+	stack   []Node
 	allNode [][]byte
 }
 
@@ -86,7 +86,8 @@ func (li *LeafIterator) allNodes() (ret [][]byte, err error) {
 		}
 		switch node.Type() {
 		case EXTENSION:
-			ret = append(ret, node.Value())
+			extension, _ := node.(*extensionNode)
+			ret = append(ret, extension.childHash)
 		case BRANCH:
 			branch, _ := node.(*branchNode)
 			for _, v := range branch.hashes {
