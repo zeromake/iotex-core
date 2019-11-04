@@ -14,12 +14,14 @@ var ErrEndOfIterator = errors.New("hit the end of the iterator, no more item")
 // Iterator iterates a trie
 type Iterator interface {
 	Next() ([]byte, []byte, error)
+	AllNodes() ([][]byte, error)
 }
 
 // LeafIterator defines an iterator to go through all the leaves under given node
 type LeafIterator struct {
 	tr    Trie
 	stack []Node
+	allNode [][]byte
 }
 
 // NewLeafIterator returns a new leaf iterator
@@ -44,7 +46,7 @@ func (li *LeafIterator) Next() ([]byte, []byte, error) {
 			key := node.Key()
 			value := node.Value()
 
-			return append(key[:0:0], key...), append(value, value...), nil
+			return append(key[:0:0], key...), value, nil
 		}
 		children, err := node.children(li.tr)
 		if err != nil {
@@ -54,4 +56,50 @@ func (li *LeafIterator) Next() ([]byte, []byte, error) {
 	}
 
 	return nil, nil, ErrEndOfIterator
+}
+
+// AllNodes returns all nodes of this trie
+func (li *LeafIterator) AllNodes() (all [][]byte, err error) {
+	for {
+		ret, err := li.allNodes()
+		if err == ErrEndOfIterator {
+			// hit the end of the iterator, exit now
+			break
+		}
+		if err != nil {
+			break
+		}
+		for _, c := range ret {
+			all = append(all, c)
+		}
+	}
+	all = append(all, li.tr.RootHash())
+	return
+}
+func (li *LeafIterator) allNodes() (ret [][]byte, err error) {
+	for len(li.stack) > 0 {
+		size := len(li.stack)
+		node := li.stack[size-1]
+		li.stack = li.stack[:size-1]
+		if node.Type() == LEAF {
+			return
+		}
+		switch node.Type() {
+		case EXTENSION:
+			ret = append(ret, node.Value())
+		case BRANCH:
+			branch, _ := node.(*branchNode)
+			for _, v := range branch.hashes {
+				ret = append(ret, v)
+			}
+		}
+		children, errs := node.children(li.tr)
+		if errs != nil {
+			err = errs
+			return
+		}
+		li.stack = append(li.stack, children...)
+	}
+
+	return nil, ErrEndOfIterator
 }

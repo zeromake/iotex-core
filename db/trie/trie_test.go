@@ -8,6 +8,9 @@ package trie
 
 import (
 	"context"
+	"fmt"
+	"io/ioutil"
+	"os"
 	"testing"
 	"time"
 
@@ -15,6 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/iotexproject/go-pkgs/hash"
+	"github.com/iotexproject/iotex-core/config"
+	"github.com/iotexproject/iotex-core/db"
+	"github.com/iotexproject/iotex-core/testutil"
 )
 
 var (
@@ -371,6 +377,93 @@ func TestInsert(t *testing.T) {
 	require.Nil(err)
 	require.True(tr.isEmptyRootHash(tr.RootHash()))
 	require.Nil(tr.Stop(context.Background()))
+}
+
+func TestIterator(t *testing.T) {
+	require := require.New(t)
+	testFile, _ := ioutil.TempFile(os.TempDir(), testTriePath)
+	testPath := testFile.Name()
+	cfg := config.Default.DB
+	cfg.DbPath = testPath
+	defer testutil.CleanupPath(t, testPath)
+	d := db.NewBoltDB(cfg)
+	d.Start(context.Background())
+	defer d.Stop(context.Background())
+	dbForTrie1, err := db.NewKVStoreForTrie("bucket1", d, db.CachedBatchOption(db.NewCachedBatch()))
+	require.NoError(err)
+	tr, err := NewTrie(KVStoreOption(dbForTrie1), KeyLengthOption(8))
+	require.NotNil(tr)
+	require.NoError(err)
+	require.Nil(tr.Start(context.Background()))
+
+	err = tr.Upsert(ham, testV[0])
+	require.NoError(err)
+	err = tr.Upsert(car, testV[1])
+	require.NoError(err)
+	err = tr.Upsert(cat, testV[2])
+	require.NoError(err)
+	err = tr.Upsert(rat, []byte("rat"))
+	require.NoError(err)
+	err = tr.Upsert(dog, testV[3])
+	require.NoError(err)
+	err = tr.Upsert(egg, testV[4])
+	require.NoError(err)
+	err = tr.Upsert(fox, testV[5])
+	require.NoError(err)
+	err = tr.Upsert(cow, testV[6])
+	require.NoError(err)
+	err = tr.Upsert(ant, testV[7])
+	require.NoError(err)
+	b, err := tr.Get(cat)
+	require.NoError(err)
+	require.Equal(testV[2], b)
+	fmt.Println("get", string(b))
+	iter, err := NewLeafIterator(tr)
+	require.NoError(err)
+	allHash, err := iter.AllNodes()
+	require.NoError(err)
+
+	dbForTrie2, err := db.NewKVStoreForTrie("bucket2", d, db.CachedBatchOption(db.NewCachedBatch()))
+	require.NoError(err)
+	// save node key/value to bucket2
+	for _, key := range allHash {
+		value, err := dbForTrie1.Get(key)
+		require.NoError(err)
+		require.NoError(dbForTrie2.Put(key, value))
+	}
+	root := tr.RootHash()
+	tr2, err := NewTrie(KVStoreOption(dbForTrie2), KeyLengthOption(8), RootHashOption(root[:]))
+	require.NotNil(tr2)
+	require.NoError(err)
+	require.Nil(tr2.Start(context.Background()))
+
+	b, err = tr2.Get(ham)
+	require.NoError(err)
+	require.Equal(testV[0], b)
+	b, err = tr2.Get(car)
+	require.NoError(err)
+	require.Equal(testV[1], b)
+	b, err = tr2.Get(cat)
+	require.NoError(err)
+	require.Equal(testV[2], b)
+	b, err = tr2.Get(rat)
+	require.NoError(err)
+	require.Equal([]byte("rat"), b)
+	b, err = tr2.Get(dog)
+	require.NoError(err)
+	require.Equal(testV[3], b)
+	b, err = tr2.Get(egg)
+	require.NoError(err)
+	require.Equal(testV[4], b)
+	b, err = tr2.Get(fox)
+	require.NoError(err)
+	require.Equal(testV[5], b)
+	b, err = tr2.Get(cow)
+	require.NoError(err)
+	require.Equal(testV[6], b)
+	b, err = tr2.Get(ant)
+	require.NoError(err)
+	require.Equal(testV[7], b)
 }
 
 func TestBatchCommit(t *testing.T) {
