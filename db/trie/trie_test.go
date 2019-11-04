@@ -8,7 +8,6 @@ package trie
 
 import (
 	"context"
-	"fmt"
 	"io/ioutil"
 	"os"
 	"testing"
@@ -417,7 +416,6 @@ func TestIterator(t *testing.T) {
 	b, err := tr.Get(cat)
 	require.NoError(err)
 	require.Equal(testV[2], b)
-	fmt.Println("get", string(b))
 	iter, err := NewLeafIterator(tr)
 	require.NoError(err)
 	allHash, err := iter.AllNodes()
