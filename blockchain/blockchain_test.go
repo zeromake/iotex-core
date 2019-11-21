@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/iotexproject/iotex-address/address"
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 
 	"github.com/iotexproject/go-pkgs/hash"
@@ -415,22 +414,8 @@ func addTestingTsfBlocks(bc Blockchain, dao blockdao.BlockDAO) error {
 func TestCreateBlockchain(t *testing.T) {
 	require := require.New(t)
 	ctx := context.Background()
-
-	cfg := config.Default
-	// disable account-based testing
-	cfg.Chain.TrieDBPath = ""
-	cfg.Genesis.EnableGravityChainVoting = false
-	// create chain
-	registry := protocol.Registry{}
-	acc := account.NewProtocol()
-	require.NoError(registry.Register(account.ProtocolID, acc))
-	rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
-	require.NoError(registry.Register(rolldpos.ProtocolID, rp))
-	bc := NewBlockchain(cfg, nil, InMemStateFactoryOption(), InMemDaoOption(), RegistryOption(&registry))
-	exec := execution.NewProtocol(bc.BlockDAO().GetBlockHash)
-	require.NoError(registry.Register(execution.ProtocolID, exec))
-	bc.Validator().AddActionEnvelopeValidators(protocol.NewGenericValidator(bc.Factory().Nonce))
-	bc.Validator().AddActionValidators(acc, exec)
+	cfg := newConfig()
+	bc := newBlockchain(cfg, t)
 	require.NoError(bc.Start(ctx))
 	require.NotNil(bc)
 	height := bc.TipHeight()
@@ -442,7 +427,7 @@ func TestCreateBlockchain(t *testing.T) {
 	}()
 
 	// add 4 sample blocks
-	require.NoError(addTestingTsfBlocks(bc, nil))
+	require.NoError(addTestingTsfBlocks(bc, bc.BlockDAO()))
 	height = bc.TipHeight()
 	require.Equal(5, int(height))
 }
@@ -463,6 +448,7 @@ func TestBlockchain_MintNewBlock(t *testing.T) {
 	require.NoError(t, registry.Register(execution.ProtocolID, exec))
 	bc.Validator().AddActionEnvelopeValidators(protocol.NewGenericValidator(bc.Factory().Nonce))
 	bc.Validator().AddActionValidators(acc, exec)
+	bc.Factory().AddActionHandlers(acc, exec)
 	require.NoError(t, bc.Start(ctx))
 	defer func() {
 		require.NoError(t, bc.Stop(ctx))
@@ -515,18 +501,8 @@ func TestBlockchain_MintNewBlock(t *testing.T) {
 
 func TestBlockchain_MintNewBlock_PopAccount(t *testing.T) {
 	ctx := context.Background()
-	cfg := config.Default
-	cfg.Genesis.EnableGravityChainVoting = false
-	registry := protocol.Registry{}
-	acc := account.NewProtocol()
-	require.NoError(t, registry.Register(account.ProtocolID, acc))
-	bc := NewBlockchain(cfg, nil, InMemStateFactoryOption(), InMemDaoOption(), RegistryOption(&registry))
-	rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
-	require.NoError(t, registry.Register(rolldpos.ProtocolID, rp))
-	exec := execution.NewProtocol(bc.BlockDAO().GetBlockHash)
-	require.NoError(t, registry.Register(execution.ProtocolID, exec))
-	bc.Validator().AddActionEnvelopeValidators(protocol.NewGenericValidator(bc.Factory().Nonce))
-	bc.Validator().AddActionValidators(acc, exec)
+	cfg := newConfig()
+	bc := newBlockchain(cfg, t)
 	require.NoError(t, bc.Start(ctx))
 	defer func() {
 		require.NoError(t, bc.Stop(ctx))
@@ -537,7 +513,7 @@ func TestBlockchain_MintNewBlock_PopAccount(t *testing.T) {
 	addr1 := identityset.Address(28).String()
 	addr3 := identityset.Address(30).String()
 	priKey3 := identityset.PrivateKey(30)
-	require.NoError(t, addTestingTsfBlocks(bc, nil))
+	require.NoError(t, addTestingTsfBlocks(bc, bc.BlockDAO()))
 
 	// test third block
 	bytes := []byte{}
@@ -720,24 +696,7 @@ func TestConstantinople(t *testing.T) {
 		}
 	}
 
-	cfg := config.Default
-	testTrieFile, _ := ioutil.TempFile(os.TempDir(), "trie")
-	testTriePath := testTrieFile.Name()
-	testDBFile, _ := ioutil.TempFile(os.TempDir(), "db")
-	testDBPath := testDBFile.Name()
-	testIndexFile, _ := ioutil.TempFile(os.TempDir(), "index")
-	testIndexPath := testIndexFile.Name()
-	defer func() {
-		testutil.CleanupPath(t, testTriePath)
-		testutil.CleanupPath(t, testDBPath)
-		testutil.CleanupPath(t, testIndexPath)
-		// clear the gateway
-		delete(cfg.Plugins, config.GatewayPlugin)
-	}()
-
-	cfg.Chain.TrieDBPath = testTriePath
-	cfg.Chain.ChainDBPath = testDBPath
-	cfg.Chain.IndexDBPath = testIndexPath
+	cfg := newConfig()
 	cfg.Chain.ProducerPrivKey = "a000000000000000000000000000000000000000000000000000000000000000"
 	cfg.Genesis.EnableGravityChainVoting = false
 	cfg.Plugins[config.GatewayPlugin] = true
@@ -749,262 +708,262 @@ func TestConstantinople(t *testing.T) {
 	})
 }
 
-func TestLoadBlockchainfromDB(t *testing.T) {
-	testValidateBlockchain := func(cfg config.Config, t *testing.T) {
-		require := require.New(t)
-		ctx := context.Background()
-
-		// Create a blockchain from scratch
-		sf, err := factory.NewFactory(cfg, factory.DefaultTrieOption())
-		require.NoError(err)
-		acc := account.NewProtocol()
-		registry := protocol.Registry{}
-		require.NoError(registry.Register(account.ProtocolID, acc))
-		rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
-		require.NoError(registry.Register(rolldpos.ProtocolID, rp))
-		var indexer blockindex.Indexer
-		if _, gateway := cfg.Plugins[config.GatewayPlugin]; gateway && !cfg.Chain.EnableAsyncIndexWrite {
-			// create indexer
-			cfg.DB.DbPath = cfg.Chain.IndexDBPath
-			indexer, err = blockindex.NewIndexer(db.NewBoltDB(cfg.DB), cfg.Genesis.Hash())
-			require.NoError(err)
-		}
-		// create BlockDAO
-		cfg.DB.DbPath = cfg.Chain.ChainDBPath
-		dao := blockdao.NewBlockDAO(db.NewBoltDB(cfg.DB), indexer, cfg.Chain.CompressBlock, cfg.DB)
-		require.NotNil(dao)
-		bc := NewBlockchain(
-			cfg,
-			dao,
-			PrecreatedStateFactoryOption(sf),
-			RegistryOption(&registry),
-		)
-		exec := execution.NewProtocol(bc.BlockDAO().GetBlockHash)
-		require.NoError(registry.Register(execution.ProtocolID, exec))
-		bc.Validator().AddActionEnvelopeValidators(protocol.NewGenericValidator(bc.Factory().Nonce))
-		bc.Validator().AddActionValidators(acc, exec)
-		require.NoError(bc.Start(ctx))
-		require.NoError(addCreatorToFactory(cfg, sf, &registry))
-
-		ms := &MockSubscriber{counter: 0}
-		require.NoError(bc.AddSubscriber(ms))
-		require.Equal(0, ms.Counter())
-
-		height := bc.TipHeight()
-		fmt.Printf("Open blockchain pass, height = %d\n", height)
-		require.Nil(addTestingTsfBlocks(bc, dao))
-		require.NoError(bc.Stop(ctx))
-		require.Equal(24, ms.Counter())
-
-		// Load a blockchain from DB
-		accountProtocol := account.NewProtocol()
-		registry = protocol.Registry{}
-		require.NoError(registry.Register(account.ProtocolID, accountProtocol))
-		bc = NewBlockchain(
-			cfg,
-			dao,
-			PrecreatedStateFactoryOption(sf),
-			RegistryOption(&registry),
-		)
-		rolldposProtocol := rolldpos.NewProtocol(
-			genesis.Default.NumCandidateDelegates,
-			genesis.Default.NumDelegates,
-			genesis.Default.NumSubEpochs,
-		)
-		require.NoError(registry.Register(rolldpos.ProtocolID, rolldposProtocol))
-		rewardingProtocol := rewarding.NewProtocol(bc, rolldposProtocol)
-		require.NoError(registry.Register(rewarding.ProtocolID, rewardingProtocol))
-		bc.Validator().AddActionEnvelopeValidators(protocol.NewGenericValidator(bc.Factory().Nonce))
-		bc.Validator().AddActionValidators(accountProtocol)
-		require.NoError(bc.Start(ctx))
-		defer func() {
-			require.NoError(bc.Stop(ctx))
-		}()
-
-		// verify block header hash
-		for i := uint64(1); i <= 5; i++ {
-			hash, err := bc.BlockDAO().GetBlockHash(i)
-			require.NoError(err)
-			height, err = bc.BlockDAO().GetBlockHeight(hash)
-			require.NoError(err)
-			require.Equal(i, height)
-			header, err := bc.BlockHeaderByHash(hash)
-			require.NoError(err)
-			require.Equal(hash, header.HashBlock())
-			header, err = bc.BlockHeaderByHeight(height)
-			require.NoError(err)
-			require.Equal(height, header.Height())
-
-			// bloomfilter only exists after aleutian height
-			require.Equal(height >= cfg.Genesis.AleutianBlockHeight, header.LogsBloomfilter() != nil)
-		}
-
-		empblk, err := bc.BlockDAO().GetBlock(hash.ZeroHash256)
-		require.Nil(empblk)
-		require.NotNil(err.Error())
-
-		header, err := bc.BlockHeaderByHeight(60000)
-		require.Nil(header)
-		require.Error(err)
-
-		// add wrong blocks
-		h := bc.TipHeight()
-		blkhash := bc.TipHash()
-		header, err = bc.BlockHeaderByHeight(h)
-		require.NoError(err)
-		require.Equal(blkhash, header.HashBlock())
-		fmt.Printf("Current tip = %d hash = %x\n", h, blkhash)
-
-		// add block with wrong height
-		selp, err := testutil.SignedTransfer(identityset.Address(29).String(), identityset.PrivateKey(27), 1, big.NewInt(50), nil, genesis.Default.ActionGasLimit, big.NewInt(0))
-		require.NoError(err)
-
-		nblk, err := block.NewTestingBuilder().
-			SetHeight(h + 2).
-			SetPrevBlockHash(blkhash).
-			SetTimeStamp(testutil.TimestampNow()).
-			AddActions(selp).SignAndBuild(identityset.PrivateKey(29))
-		require.NoError(err)
-
-		err = bc.ValidateBlock(&nblk)
-		require.Error(err)
-		fmt.Printf("Cannot validate block %d: %v\n", header.Height(), err)
-
-		// add block with zero prev hash
-		selp2, err := testutil.SignedTransfer(identityset.Address(29).String(), identityset.PrivateKey(27), 1, big.NewInt(50), nil, genesis.Default.ActionGasLimit, big.NewInt(0))
-		require.NoError(err)
-
-		nblk, err = block.NewTestingBuilder().
-			SetHeight(h + 1).
-			SetPrevBlockHash(hash.ZeroHash256).
-			SetTimeStamp(testutil.TimestampNow()).
-			AddActions(selp2).SignAndBuild(identityset.PrivateKey(29))
-		require.NoError(err)
-		err = bc.ValidateBlock(&nblk)
-		require.Error(err)
-		fmt.Printf("Cannot validate block %d: %v\n", header.Height(), err)
-
-		// add existing block again will have no effect
-		blk, err := bc.BlockDAO().GetBlockByHeight(3)
-		require.NotNil(blk)
-		require.NoError(err)
-		require.NoError(bc.(*blockchain).commitBlock(blk))
-		fmt.Printf("Cannot add block 3 again: %v\n", err)
-
-		// invalid address returns error
-		act, err := bc.Factory().AccountState("")
-		require.Equal("invalid bech32 string length 0", errors.Cause(err).Error())
-		require.Nil(act)
-
-		// valid but unused address should return empty account
-		act, err = bc.Factory().AccountState("io1066kus4vlyvk0ljql39fzwqw0k22h7j8wmef3n")
-		require.NoError(err)
-		require.Equal(uint64(0), act.Nonce)
-		require.Equal(big.NewInt(0), act.Balance)
-
-		_, gateway := cfg.Plugins[config.GatewayPlugin]
-		if gateway && !cfg.Chain.EnableAsyncIndexWrite {
-			// verify deployed contract
-			ai, err := indexer.GetActionIndex(deployHash[:])
-			require.NoError(err)
-			r, err := dao.GetReceiptByActionHash(deployHash, ai.BlockHeight())
-			require.NoError(err)
-			require.NotNil(r)
-			require.Equal(uint64(1), r.Status)
-			require.Equal(uint64(2), r.BlockHeight)
-
-			// 2 topics in block 3 calling set()
-			funcSig := hash.Hash256b([]byte("Set(uint256)"))
-			blk, err := bc.BlockDAO().GetBlockByHeight(3)
-			require.NoError(err)
-			f := blk.Header.LogsBloomfilter()
-			require.NotNil(f)
-			require.True(f.Exist(funcSig[:]))
-			require.True(f.Exist(setTopic))
-
-			// 3 topics in block 4 calling get()
-			funcSig = hash.Hash256b([]byte("Get(address,uint256)"))
-			blk, err = bc.BlockDAO().GetBlockByHeight(4)
-			require.NoError(err)
-			f = blk.Header.LogsBloomfilter()
-			require.NotNil(f)
-			require.True(f.Exist(funcSig[:]))
-			require.True(f.Exist(setTopic))
-			require.True(f.Exist(getTopic))
-
-			// verify genesis block index
-			bi, err := indexer.GetBlockIndex(0)
-			require.NoError(err)
-			require.Equal(cfg.Genesis.Hash(), hash.BytesToHash256(bi.Hash()))
-			require.EqualValues(0, bi.NumAction())
-			require.Equal(big.NewInt(0), bi.TsfAmount())
-
-			for h := uint64(1); h <= 5; h++ {
-				// verify getting number of actions
-				blk, err = bc.BlockDAO().GetBlockByHeight(h)
-				require.NoError(err)
-				blkIndex, err := indexer.GetBlockIndex(h)
-				require.NoError(err)
-				require.EqualValues(blkIndex.NumAction(), len(blk.Actions))
-
-				// verify getting transfer amount
-				tsfs, _ := action.ClassifyActions(blk.Actions)
-				tsfa := big.NewInt(0)
-				for _, tsf := range tsfs {
-					tsfa.Add(tsfa, tsf.Amount())
-				}
-				require.Equal(blkIndex.TsfAmount(), tsfa)
-			}
-		}
-	}
-
-	testTrieFile, _ := ioutil.TempFile(os.TempDir(), "trie")
-	testTriePath := testTrieFile.Name()
-	testDBFile, _ := ioutil.TempFile(os.TempDir(), "db")
-	testDBPath := testDBFile.Name()
-	testIndexFile, _ := ioutil.TempFile(os.TempDir(), "index")
-	testIndexPath := testIndexFile.Name()
-	defer func() {
-		testutil.CleanupPath(t, testTriePath)
-		testutil.CleanupPath(t, testDBPath)
-		testutil.CleanupPath(t, testIndexPath)
-	}()
-
-	cfg := config.Default
-	cfg.Chain.TrieDBPath = testTriePath
-	cfg.Chain.ChainDBPath = testDBPath
-	cfg.Chain.IndexDBPath = testIndexPath
-	cfg.Genesis.EnableGravityChainVoting = false
-
-	t.Run("load blockchain from DB w/o explorer", func(t *testing.T) {
-		testValidateBlockchain(cfg, t)
-	})
-
-	testTrieFile, _ = ioutil.TempFile(os.TempDir(), "trie")
-	testTriePath2 := testTrieFile.Name()
-	testDBFile, _ = ioutil.TempFile(os.TempDir(), "db")
-	testDBPath2 := testDBFile.Name()
-	testIndexFile2, _ := ioutil.TempFile(os.TempDir(), "index")
-	testIndexPath2 := testIndexFile2.Name()
-	defer func() {
-		testutil.CleanupPath(t, testTriePath2)
-		testutil.CleanupPath(t, testDBPath2)
-		testutil.CleanupPath(t, testIndexPath2)
-		// clear the gateway
-		delete(cfg.Plugins, config.GatewayPlugin)
-	}()
-
-	cfg.Plugins[config.GatewayPlugin] = true
-	cfg.Chain.TrieDBPath = testTriePath2
-	cfg.Chain.ChainDBPath = testDBPath2
-	cfg.Chain.IndexDBPath = testIndexPath2
-	cfg.Chain.EnableAsyncIndexWrite = false
-	cfg.Genesis.AleutianBlockHeight = 3
-
-	t.Run("load blockchain from DB", func(t *testing.T) {
-		testValidateBlockchain(cfg, t)
-	})
-}
+//func TestLoadBlockchainfromDB(t *testing.T) {
+//	testValidateBlockchain := func(cfg config.Config, t *testing.T) {
+//		require := require.New(t)
+//		ctx := context.Background()
+//
+//		// Create a blockchain from scratch
+//		sf, err := factory.NewFactory(cfg, factory.DefaultTrieOption())
+//		require.NoError(err)
+//		acc := account.NewProtocol()
+//		registry := protocol.Registry{}
+//		require.NoError(registry.Register(account.ProtocolID, acc))
+//		rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
+//		require.NoError(registry.Register(rolldpos.ProtocolID, rp))
+//		var indexer blockindex.Indexer
+//		if _, gateway := cfg.Plugins[config.GatewayPlugin]; gateway && !cfg.Chain.EnableAsyncIndexWrite {
+//			// create indexer
+//			cfg.DB.DbPath = cfg.Chain.IndexDBPath
+//			indexer, err = blockindex.NewIndexer(db.NewBoltDB(cfg.DB), cfg.Genesis.Hash())
+//			require.NoError(err)
+//		}
+//		// create BlockDAO
+//		cfg.DB.DbPath = cfg.Chain.ChainDBPath
+//		dao := blockdao.NewBlockDAO(db.NewBoltDB(cfg.DB), indexer, cfg.Chain.CompressBlock, cfg.DB)
+//		require.NotNil(dao)
+//		bc := NewBlockchain(
+//			cfg,
+//			dao,
+//			PrecreatedStateFactoryOption(sf),
+//			RegistryOption(&registry),
+//		)
+//		exec := execution.NewProtocol(bc.BlockDAO().GetBlockHash)
+//		require.NoError(registry.Register(execution.ProtocolID, exec))
+//		bc.Validator().AddActionEnvelopeValidators(protocol.NewGenericValidator(bc.Factory().Nonce))
+//		bc.Validator().AddActionValidators(acc, exec)
+//		require.NoError(bc.Start(ctx))
+//		require.NoError(addCreatorToFactory(cfg, sf, &registry))
+//
+//		ms := &MockSubscriber{counter: 0}
+//		require.NoError(bc.AddSubscriber(ms))
+//		require.Equal(0, ms.Counter())
+//
+//		height := bc.TipHeight()
+//		fmt.Printf("Open blockchain pass, height = %d\n", height)
+//		require.Nil(addTestingTsfBlocks(bc, dao))
+//		require.NoError(bc.Stop(ctx))
+//		require.Equal(24, ms.Counter())
+//
+//		// Load a blockchain from DB
+//		accountProtocol := account.NewProtocol()
+//		registry = protocol.Registry{}
+//		require.NoError(registry.Register(account.ProtocolID, accountProtocol))
+//		bc = NewBlockchain(
+//			cfg,
+//			dao,
+//			PrecreatedStateFactoryOption(sf),
+//			RegistryOption(&registry),
+//		)
+//		rolldposProtocol := rolldpos.NewProtocol(
+//			genesis.Default.NumCandidateDelegates,
+//			genesis.Default.NumDelegates,
+//			genesis.Default.NumSubEpochs,
+//		)
+//		require.NoError(registry.Register(rolldpos.ProtocolID, rolldposProtocol))
+//		rewardingProtocol := rewarding.NewProtocol(bc, rolldposProtocol)
+//		require.NoError(registry.Register(rewarding.ProtocolID, rewardingProtocol))
+//		bc.Validator().AddActionEnvelopeValidators(protocol.NewGenericValidator(bc.Factory().Nonce))
+//		bc.Validator().AddActionValidators(accountProtocol)
+//		require.NoError(bc.Start(ctx))
+//		defer func() {
+//			require.NoError(bc.Stop(ctx))
+//		}()
+//
+//		// verify block header hash
+//		for i := uint64(1); i <= 5; i++ {
+//			hash, err := bc.BlockDAO().GetBlockHash(i)
+//			require.NoError(err)
+//			height, err = bc.BlockDAO().GetBlockHeight(hash)
+//			require.NoError(err)
+//			require.Equal(i, height)
+//			header, err := bc.BlockHeaderByHash(hash)
+//			require.NoError(err)
+//			require.Equal(hash, header.HashBlock())
+//			header, err = bc.BlockHeaderByHeight(height)
+//			require.NoError(err)
+//			require.Equal(height, header.Height())
+//
+//			// bloomfilter only exists after aleutian height
+//			require.Equal(height >= cfg.Genesis.AleutianBlockHeight, header.LogsBloomfilter() != nil)
+//		}
+//
+//		empblk, err := bc.BlockDAO().GetBlock(hash.ZeroHash256)
+//		require.Nil(empblk)
+//		require.NotNil(err.Error())
+//
+//		header, err := bc.BlockHeaderByHeight(60000)
+//		require.Nil(header)
+//		require.Error(err)
+//
+//		// add wrong blocks
+//		h := bc.TipHeight()
+//		blkhash := bc.TipHash()
+//		header, err = bc.BlockHeaderByHeight(h)
+//		require.NoError(err)
+//		require.Equal(blkhash, header.HashBlock())
+//		fmt.Printf("Current tip = %d hash = %x\n", h, blkhash)
+//
+//		// add block with wrong height
+//		selp, err := testutil.SignedTransfer(identityset.Address(29).String(), identityset.PrivateKey(27), 1, big.NewInt(50), nil, genesis.Default.ActionGasLimit, big.NewInt(0))
+//		require.NoError(err)
+//
+//		nblk, err := block.NewTestingBuilder().
+//			SetHeight(h + 2).
+//			SetPrevBlockHash(blkhash).
+//			SetTimeStamp(testutil.TimestampNow()).
+//			AddActions(selp).SignAndBuild(identityset.PrivateKey(29))
+//		require.NoError(err)
+//
+//		err = bc.ValidateBlock(&nblk)
+//		require.Error(err)
+//		fmt.Printf("Cannot validate block %d: %v\n", header.Height(), err)
+//
+//		// add block with zero prev hash
+//		selp2, err := testutil.SignedTransfer(identityset.Address(29).String(), identityset.PrivateKey(27), 1, big.NewInt(50), nil, genesis.Default.ActionGasLimit, big.NewInt(0))
+//		require.NoError(err)
+//
+//		nblk, err = block.NewTestingBuilder().
+//			SetHeight(h + 1).
+//			SetPrevBlockHash(hash.ZeroHash256).
+//			SetTimeStamp(testutil.TimestampNow()).
+//			AddActions(selp2).SignAndBuild(identityset.PrivateKey(29))
+//		require.NoError(err)
+//		err = bc.ValidateBlock(&nblk)
+//		require.Error(err)
+//		fmt.Printf("Cannot validate block %d: %v\n", header.Height(), err)
+//
+//		// add existing block again will have no effect
+//		blk, err := bc.BlockDAO().GetBlockByHeight(3)
+//		require.NotNil(blk)
+//		require.NoError(err)
+//		require.NoError(bc.(*blockchain).commitBlock(blk))
+//		fmt.Printf("Cannot add block 3 again: %v\n", err)
+//
+//		// invalid address returns error
+//		act, err := bc.Factory().AccountState("")
+//		require.Equal("invalid bech32 string length 0", errors.Cause(err).Error())
+//		require.Nil(act)
+//
+//		// valid but unused address should return empty account
+//		act, err = bc.Factory().AccountState("io1066kus4vlyvk0ljql39fzwqw0k22h7j8wmef3n")
+//		require.NoError(err)
+//		require.Equal(uint64(0), act.Nonce)
+//		require.Equal(big.NewInt(0), act.Balance)
+//
+//		_, gateway := cfg.Plugins[config.GatewayPlugin]
+//		if gateway && !cfg.Chain.EnableAsyncIndexWrite {
+//			// verify deployed contract
+//			ai, err := indexer.GetActionIndex(deployHash[:])
+//			require.NoError(err)
+//			r, err := dao.GetReceiptByActionHash(deployHash, ai.BlockHeight())
+//			require.NoError(err)
+//			require.NotNil(r)
+//			require.Equal(uint64(1), r.Status)
+//			require.Equal(uint64(2), r.BlockHeight)
+//
+//			// 2 topics in block 3 calling set()
+//			funcSig := hash.Hash256b([]byte("Set(uint256)"))
+//			blk, err := bc.BlockDAO().GetBlockByHeight(3)
+//			require.NoError(err)
+//			f := blk.Header.LogsBloomfilter()
+//			require.NotNil(f)
+//			require.True(f.Exist(funcSig[:]))
+//			require.True(f.Exist(setTopic))
+//
+//			// 3 topics in block 4 calling get()
+//			funcSig = hash.Hash256b([]byte("Get(address,uint256)"))
+//			blk, err = bc.BlockDAO().GetBlockByHeight(4)
+//			require.NoError(err)
+//			f = blk.Header.LogsBloomfilter()
+//			require.NotNil(f)
+//			require.True(f.Exist(funcSig[:]))
+//			require.True(f.Exist(setTopic))
+//			require.True(f.Exist(getTopic))
+//
+//			// verify genesis block index
+//			bi, err := indexer.GetBlockIndex(0)
+//			require.NoError(err)
+//			require.Equal(cfg.Genesis.Hash(), hash.BytesToHash256(bi.Hash()))
+//			require.EqualValues(0, bi.NumAction())
+//			require.Equal(big.NewInt(0), bi.TsfAmount())
+//
+//			for h := uint64(1); h <= 5; h++ {
+//				// verify getting number of actions
+//				blk, err = bc.BlockDAO().GetBlockByHeight(h)
+//				require.NoError(err)
+//				blkIndex, err := indexer.GetBlockIndex(h)
+//				require.NoError(err)
+//				require.EqualValues(blkIndex.NumAction(), len(blk.Actions))
+//
+//				// verify getting transfer amount
+//				tsfs, _ := action.ClassifyActions(blk.Actions)
+//				tsfa := big.NewInt(0)
+//				for _, tsf := range tsfs {
+//					tsfa.Add(tsfa, tsf.Amount())
+//				}
+//				require.Equal(blkIndex.TsfAmount(), tsfa)
+//			}
+//		}
+//	}
+//
+//	testTrieFile, _ := ioutil.TempFile(os.TempDir(), "trie")
+//	testTriePath := testTrieFile.Name()
+//	testDBFile, _ := ioutil.TempFile(os.TempDir(), "db")
+//	testDBPath := testDBFile.Name()
+//	testIndexFile, _ := ioutil.TempFile(os.TempDir(), "index")
+//	testIndexPath := testIndexFile.Name()
+//	defer func() {
+//		testutil.CleanupPath(t, testTriePath)
+//		testutil.CleanupPath(t, testDBPath)
+//		testutil.CleanupPath(t, testIndexPath)
+//	}()
+//
+//	cfg := config.Default
+//	cfg.Chain.TrieDBPath = testTriePath
+//	cfg.Chain.ChainDBPath = testDBPath
+//	cfg.Chain.IndexDBPath = testIndexPath
+//	cfg.Genesis.EnableGravityChainVoting = false
+//
+//	t.Run("load blockchain from DB w/o explorer", func(t *testing.T) {
+//		testValidateBlockchain(cfg, t)
+//	})
+//
+//	testTrieFile, _ = ioutil.TempFile(os.TempDir(), "trie")
+//	testTriePath2 := testTrieFile.Name()
+//	testDBFile, _ = ioutil.TempFile(os.TempDir(), "db")
+//	testDBPath2 := testDBFile.Name()
+//	testIndexFile2, _ := ioutil.TempFile(os.TempDir(), "index")
+//	testIndexPath2 := testIndexFile2.Name()
+//	defer func() {
+//		testutil.CleanupPath(t, testTriePath2)
+//		testutil.CleanupPath(t, testDBPath2)
+//		testutil.CleanupPath(t, testIndexPath2)
+//		// clear the gateway
+//		delete(cfg.Plugins, config.GatewayPlugin)
+//	}()
+//
+//	cfg.Plugins[config.GatewayPlugin] = true
+//	cfg.Chain.TrieDBPath = testTriePath2
+//	cfg.Chain.ChainDBPath = testDBPath2
+//	cfg.Chain.IndexDBPath = testIndexPath2
+//	cfg.Chain.EnableAsyncIndexWrite = false
+//	cfg.Genesis.AleutianBlockHeight = 3
+//
+//	t.Run("load blockchain from DB", func(t *testing.T) {
+//		testValidateBlockchain(cfg, t)
+//	})
+//}
 
 func TestBlockchain_Validator(t *testing.T) {
 	cfg := config.Default
@@ -1251,4 +1210,58 @@ func addCreatorToFactory(cfg config.Config, sf factory.Factory, registry *protoc
 		return err
 	}
 	return sf.Commit(ws)
+}
+
+func newConfig() config.Config {
+	cfg := config.Default
+
+	testTrieFile, _ := ioutil.TempFile(os.TempDir(), "trie")
+	testTriePath := testTrieFile.Name()
+	testDBFile, _ := ioutil.TempFile(os.TempDir(), "db")
+	testDBPath := testDBFile.Name()
+	testIndexFile, _ := ioutil.TempFile(os.TempDir(), "index")
+	testIndexPath := testIndexFile.Name()
+
+	cfg.Plugins[config.GatewayPlugin] = true
+	cfg.Chain.TrieDBPath = testTriePath
+	cfg.Chain.ChainDBPath = testDBPath
+	cfg.Chain.IndexDBPath = testIndexPath
+	cfg.Chain.EnableAsyncIndexWrite = false
+	cfg.Genesis.EnableGravityChainVoting = true
+	cfg.ActPool.MinGasPriceStr = "0"
+	cfg.API.RangeQueryLimit = 100
+
+	return cfg
+}
+
+func newBlockchain(cfg config.Config, t *testing.T) Blockchain {
+	registry := protocol.Registry{}
+	acc := account.NewProtocol()
+	require.NoError(t, registry.Register(account.ProtocolID, acc))
+	rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
+	require.NoError(t, registry.Register(rolldpos.ProtocolID, rp))
+	dbConfig := cfg.DB
+	sf, err := factory.NewFactory(cfg, factory.DefaultTrieOption())
+	require.NoError(t, err)
+	// create indexer
+	dbConfig.DbPath = cfg.Chain.IndexDBPath
+	indexer, err := blockindex.NewIndexer(db.NewBoltDB(dbConfig), cfg.Genesis.Hash())
+	require.NoError(t, err)
+	// create BlockDAO
+	dbConfig.DbPath = cfg.Chain.ChainDBPath
+	dao := blockdao.NewBlockDAO(db.NewBoltDB(dbConfig), indexer, cfg.Chain.CompressBlock, dbConfig)
+	require.NotNil(t, dao)
+	bc := NewBlockchain(
+		cfg,
+		dao,
+		PrecreatedStateFactoryOption(sf),
+		RegistryOption(&registry),
+	)
+	require.NotNil(t, bc)
+	bc.Validator().AddActionEnvelopeValidators(protocol.NewGenericValidator(bc.Factory().Nonce))
+	exec := execution.NewProtocol(bc.BlockDAO().GetBlockHash)
+	require.NoError(t, registry.Register(execution.ProtocolID, exec))
+	bc.Validator().AddActionValidators(acc, exec)
+	bc.Factory().AddActionHandlers(acc, exec)
+	return bc
 }

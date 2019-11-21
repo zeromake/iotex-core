@@ -32,19 +32,7 @@ func TestBlockBufferFlush(t *testing.T) {
 	ctx := context.Background()
 	cfg, err := newTestConfig()
 	require.Nil(err)
-
-	registry := protocol.Registry{}
-	rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
-	require.NoError(registry.Register(rolldpos.ProtocolID, rp))
-	chain := blockchain.NewBlockchain(
-		cfg,
-		nil,
-		blockchain.InMemStateFactoryOption(),
-		blockchain.InMemDaoOption(),
-		blockchain.RegistryOption(&registry),
-	)
-	chain.Validator().AddActionEnvelopeValidators(protocol.NewGenericValidator(chain.Factory().Nonce))
-	chain.Validator().AddActionValidators(account.NewProtocol())
+	chain := newBlockchain(cfg, t)
 	require.NoError(chain.Start(ctx))
 	require.NotNil(chain)
 	ap, err := actpool.NewActPool(chain, cfg.ActPool, actpool.EnableExperimentalActions())
@@ -134,16 +122,7 @@ func TestBlockBufferGetBlocksIntervalsToSync(t *testing.T) {
 	ctx := context.Background()
 	cfg, err := newTestConfig()
 	require.Nil(err)
-	registry := protocol.Registry{}
-	rp := rolldpos.NewProtocol(cfg.Genesis.NumCandidateDelegates, cfg.Genesis.NumDelegates, cfg.Genesis.NumSubEpochs)
-	require.NoError(registry.Register(rolldpos.ProtocolID, rp))
-	chain := blockchain.NewBlockchain(
-		cfg,
-		nil,
-		blockchain.InMemStateFactoryOption(),
-		blockchain.InMemDaoOption(),
-		blockchain.RegistryOption(&registry),
-	)
+	chain := newBlockchain(cfg, t)
 	require.NotNil(chain)
 	require.NoError(chain.Start(ctx))
 	ap, err := actpool.NewActPool(chain, cfg.ActPool, actpool.EnableExperimentalActions())
