@@ -32,11 +32,15 @@ import (
 	"github.com/iotexproject/iotex-core/action/protocol"
 	"github.com/iotexproject/iotex-core/action/protocol/account"
 	accountutil "github.com/iotexproject/iotex-core/action/protocol/account/util"
+	"github.com/iotexproject/iotex-core/action/protocol/execution"
+	"github.com/iotexproject/iotex-core/action/protocol/poll"
+	"github.com/iotexproject/iotex-core/action/protocol/rewarding"
 	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
 	"github.com/iotexproject/iotex-core/actpool"
 	"github.com/iotexproject/iotex-core/blockchain"
 	"github.com/iotexproject/iotex-core/blockchain/block"
 	"github.com/iotexproject/iotex-core/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/blockchain/genesis"
 	"github.com/iotexproject/iotex-core/blockindex"
 	"github.com/iotexproject/iotex-core/config"
 	cp "github.com/iotexproject/iotex-core/crypto"
@@ -447,8 +451,6 @@ func TestRollDPoSConsensus(t *testing.T) {
 			r := rewarding.NewProtocol(chain, rolldposProtocol)
 			require.NoError(t, registry.Register(rewarding.ProtocolID, r))
 			require.NoError(t, registry.Register(poll.ProtocolID, p))
-
-			sf.AddActionHandlers(acc, evm, r)
 
 			chain.Validator().AddActionEnvelopeValidators(protocol.NewGenericValidator(chain.Factory().Nonce))
 			chain.Validator().AddActionValidators(acc, evm, r)
