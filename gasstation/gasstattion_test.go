@@ -159,8 +159,6 @@ func TestEstimateGasForAction(t *testing.T) {
 	// test for payload
 	act = getActionWithPayload()
 	require.NotNil(act)
-	require.NoError(bc.Start(context.Background()))
-	require.NotNil(bc)
 	ret, err = gs.EstimateGasForAction(act)
 	require.NoError(err)
 	// base intrinsic gas 10000,plus data size*ExecutionDataGas
