@@ -9,10 +9,10 @@ package gasstation
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"math/big"
+	"os"
 	"testing"
-
-	"github.com/iotexproject/iotex-core/pkg/unit"
 
 	"github.com/stretchr/testify/require"
 
@@ -23,9 +23,12 @@ import (
 	"github.com/iotexproject/iotex-core/action/protocol/rolldpos"
 	"github.com/iotexproject/iotex-core/blockchain"
 	"github.com/iotexproject/iotex-core/blockchain/blockdao"
+	"github.com/iotexproject/iotex-core/blockindex"
 	"github.com/iotexproject/iotex-core/config"
 	"github.com/iotexproject/iotex-core/db"
+	"github.com/iotexproject/iotex-core/pkg/unit"
 	"github.com/iotexproject/iotex-core/pkg/version"
+	"github.com/iotexproject/iotex-core/state/factory"
 	"github.com/iotexproject/iotex-core/test/identityset"
 	"github.com/iotexproject/iotex-core/testutil"
 	"github.com/iotexproject/iotex-proto/golang/iotextypes"
@@ -35,6 +38,7 @@ func TestNewGasStation(t *testing.T) {
 	require := require.New(t)
 	require.NotNil(NewGasStation(nil, config.Default.API))
 }
+
 func TestSuggestGasPriceForUserAction(t *testing.T) {
 	ctx := context.Background()
 	cfg := newConfig()
@@ -247,6 +251,5 @@ func newBlockchain(cfg config.Config, t *testing.T) blockchain.Blockchain {
 	exec := execution.NewProtocol(bc.BlockDAO().GetBlockHash)
 	require.NoError(t, registry.Register(execution.ProtocolID, exec))
 	bc.Validator().AddActionValidators(acc, exec)
-	bc.Factory().AddActionHandlers(acc, exec)
 	return bc
 }
