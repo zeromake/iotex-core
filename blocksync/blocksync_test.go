@@ -465,6 +465,5 @@ func newBlockchain(cfg config.Config, t *testing.T) blockchain.Blockchain {
 	exec := execution.NewProtocol(bc.BlockDAO().GetBlockHash)
 	require.NoError(t, registry.Register(execution.ProtocolID, exec))
 	bc.Validator().AddActionValidators(acc, exec)
-	bc.Factory().AddActionHandlers(acc, exec)
 	return bc
 }
