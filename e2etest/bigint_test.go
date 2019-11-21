@@ -110,7 +110,6 @@ func prepareBlockchain(ctx context.Context, executor string, r *require.Assertio
 
 	bc.Validator().AddActionEnvelopeValidators(protocol.NewGenericValidator(bc.Factory().Nonce))
 	bc.Validator().AddActionValidators(account.NewProtocol(), execution.NewProtocol(bc.BlockDAO().GetBlockHash), reward)
-	r.NoError(bc.Start(ctx))
 	exec := execution.NewProtocol(bc.BlockDAO().GetBlockHash)
 	r.NoError(registry.Register(execution.ProtocolID, exec))
 	r.NoError(bc.Start(ctx))
