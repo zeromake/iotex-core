@@ -94,9 +94,9 @@ func TestLocalCommit(t *testing.T) {
 	require.NoError(p.Start(ctx))
 
 	defer func() {
-		p.Stop(ctx)
-		svr.Stop(ctx)
-		bc.Stop(ctx)
+		require.Nil(p.Stop(ctx))
+		require.Nil(svr.Stop(ctx))
+		require.Nil(bc.Stop(ctx))
 	}()
 
 	// check balance
