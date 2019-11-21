@@ -435,8 +435,23 @@ func TestRollDPoSConsensus(t *testing.T) {
 				blockchain.PrecreatedStateFactoryOption(sf),
 				blockchain.RegistryOption(&registry),
 			)
+			evm := execution.NewProtocol(chain.BlockDAO().GetBlockHash)
+			require.NoError(t, registry.Register(execution.ProtocolID, evm))
+			p := poll.NewLifeLongDelegatesProtocol(cfg[i].Genesis.Delegates)
+			rolldposProtocol := rolldpos.NewProtocol(
+				genesis.Default.NumCandidateDelegates,
+				genesis.Default.NumDelegates,
+				genesis.Default.NumSubEpochs,
+				rolldpos.EnableDardanellesSubEpoch(cfg[i].Genesis.DardanellesBlockHeight, cfg[i].Genesis.DardanellesNumSubEpochs),
+			)
+			r := rewarding.NewProtocol(chain, rolldposProtocol)
+			require.NoError(t, registry.Register(rewarding.ProtocolID, r))
+			require.NoError(t, registry.Register(poll.ProtocolID, p))
+
+			sf.AddActionHandlers(acc, evm, r)
+
 			chain.Validator().AddActionEnvelopeValidators(protocol.NewGenericValidator(chain.Factory().Nonce))
-			chain.Validator().AddActionValidators(account.NewProtocol())
+			chain.Validator().AddActionValidators(acc, evm, r)
 
 			chains = append(chains, chain)
 
