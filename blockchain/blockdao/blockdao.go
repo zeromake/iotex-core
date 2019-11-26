@@ -118,6 +118,7 @@ type (
 	blockDAO struct {
 		compressBlock bool
 		kvstore       db.KVStore
+		oldDB         db.KVStore
 		indexer       BlockIndexer
 		htf           db.RangeIndex
 		kvstores      sync.Map // store like map[index]db.KVStore,index from 0 1...N
@@ -155,6 +156,11 @@ func NewBlockDAO(kvstore db.KVStore, indexer BlockIndexer, compressBlock bool, c
 		return nil
 	}
 	blockDAO.timerFactory = timerFactory
+	// check if have old db
+	err = blockDAO.checkOldDB()
+	if err != nil {
+		return nil
+	}
 	blockDAO.lifecycle.Add(kvstore)
 	if indexer != nil {
 		blockDAO.lifecycle.Add(indexer)
@@ -176,6 +182,16 @@ func (dao *blockDAO) Start(ctx context.Context) error {
 		}
 	}
 	err = dao.initStores()
+	if err != nil {
+		return err
+	}
+	// check if make migrate
+	if dao.oldDB != nil {
+		err = dao.migrate()
+		if err != nil {
+			return err
+		}
+	}
 	if err != nil {
 		return err
 	}
