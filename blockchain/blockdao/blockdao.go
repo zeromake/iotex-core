@@ -40,8 +40,8 @@ import (
 const (
 	blockNS                  = "blk"
 	blockHashHeightMappingNS = "h2h"
-	blockDataNS = "bdn"
-	receiptsNS  = "rpt"
+	blockDataNS              = "bdn"
+	receiptsNS               = "rpt"
 )
 
 // these NS belong to old DB before migrating to separate index
@@ -58,6 +58,8 @@ const (
 
 var (
 	topHeightKey       = []byte("th")
+	tipHeightKey       = []byte("tih")
+	startHeightKey     = []byte("sh")
 	topHashKey         = []byte("ts")
 	hashPrefix         = []byte("ha.")
 	heightPrefix       = []byte("he.")
@@ -604,6 +606,16 @@ func (dao *blockDAO) putBlockForBlockdb(blk *block.Block) error {
 	if h != hash.ZeroHash256 && err == nil {
 		return errors.Errorf("block %d already exist", blkHeight)
 	}
+
+	kv, _, err := dao.getTopDB(blkHeight)
+	if err != nil {
+		return err
+	}
+	batchForBlock := db.NewBatch()
+	_, err = kv.Get(blockNS, startHeightKey)
+	if err != nil && errors.Cause(err) == db.ErrNotExist {
+		batchForBlock.Put(blockNS, startHeightKey, heightValue, "failed to put block header")
+	}
 	serBlk, err := blk.Serialize()
 	if err != nil {
 		return errors.Wrap(err, "failed to serialize block")
@@ -616,10 +628,6 @@ func (dao *blockDAO) putBlockForBlockdb(blk *block.Block) error {
 			return errors.Wrapf(err, "error when compressing a block")
 		}
 	}
-	kv, _, err := dao.getTopDB(blkHeight)
-	if err != nil {
-		return err
-	}
 	countingIndex, err := db.NewCountingIndexNX(kv, []byte(blockDataNS))
 	if err != nil {
 		return err
@@ -629,8 +637,8 @@ func (dao *blockDAO) putBlockForBlockdb(blk *block.Block) error {
 		return err
 	}
 
-	heightKey := append(heightPrefix, heightValue...)
-	batchForBlock.Put(blockHashHeightMappingNS, heightKey, hash[:], "failed to put height -> hash mapping")
+	heightKey := heightKey(blkHeight)
+	batchForBlock.Put(blockHashHeightMappingNS, heightKey, h[:], "failed to put height -> hash mapping")
 	// write receipts
 	if blk.Receipts != nil {
 		receipts := iotextypes.Receipts{}
@@ -659,7 +667,7 @@ func (dao *blockDAO) putBlockForBlockdb(blk *block.Block) error {
 	}
 	if blkHeight > tipHeight {
 		batchForBlock.Put(blockNS, tipHeightKey, heightValue, "failed to put top height")
-		batchForBlock.Put(blockNS, topHashKey, hash[:], "failed to put top hash")
+		batchForBlock.Put(blockNS, topHashKey, h[:], "failed to put top hash")
 	}
 	return kv.Commit(batchForBlock)
 }
@@ -673,7 +681,7 @@ func (dao *blockDAO) putBlock(blk *block.Block) error {
 	blkHeight := blk.Height()
 	hash := blk.HashBlock()
 	heightValue := byteutil.Uint64ToBytes(blkHeight)
-	heightKey := append(heightPrefix, heightValue...)
+	heightKey := heightKey(blkHeight)
 	batch := db.NewBatch()
 	hashKey := append(hashPrefix, hash[:]...)
 	batch.Put(blockHashHeightMappingNS, hashKey, heightValue, "failed to put hash -> height mapping")
@@ -747,7 +755,6 @@ func (dao *blockDAO) deleteTipBlock() error {
 	heightKey := heightKey(height)
 	batchForBlock.Delete(blockHashHeightMappingNS, heightKey, "failed to delete height -> hash mapping")
 	// Delete height -> hash mapping
-	heightKey := heightKey(height)
 	batch.Delete(blockHashHeightMappingNS, heightKey, "failed to delete height -> hash mapping")
 
 	// Update tip height
