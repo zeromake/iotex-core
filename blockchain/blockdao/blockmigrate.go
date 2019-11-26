@@ -58,7 +58,8 @@ func (dao *blockDAO) checkOldDB() error {
 		return nil
 	}
 
-	bakDbPath := dao.cfg.DbPath + ".bak"
+	bakDbPath := path.Dir(dao.cfg.DbPath) + "/oldchain.db"
+	log.L().Info("bakDbPath::", zap.String("bakDbPath:", bakDbPath))
 	if err := os.Rename(dao.cfg.DbPath, bakDbPath); err != nil {
 		return err
 	}
