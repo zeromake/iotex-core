@@ -270,9 +270,6 @@ func (dao *blockDAO) initStores() error {
 			maxN = uint64(n)
 		}
 	}
-	if maxN == 0 {
-		maxN = 1
-	}
 	dao.topIndex.Store(maxN)
 	return dao.initCountingIndex()
 }
