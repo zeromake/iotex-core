@@ -597,9 +597,9 @@ func (dao *blockDAO) getReceipts(blkHeight uint64) ([]*action.Receipt, error) {
 	return blockReceipts, nil
 }
 
-// putBlock puts a block
-func (dao *blockDAO) putBlock(blk *block.Block) error {
+func (dao *blockDAO) putBlockForBlockdb(blk *block.Block) error {
 	blkHeight := blk.Height()
+	heightValue := byteutil.Uint64ToBytes(blkHeight)
 	h, err := dao.getBlockHash(blkHeight)
 	if h != hash.ZeroHash256 && err == nil {
 		return errors.Errorf("block %d already exist", blkHeight)
@@ -629,6 +629,8 @@ func (dao *blockDAO) putBlock(blk *block.Block) error {
 		return err
 	}
 
+	heightKey := append(heightPrefix, heightValue...)
+	batchForBlock.Put(blockHashHeightMappingNS, heightKey, hash[:], "failed to put height -> hash mapping")
 	// write receipts
 	if blk.Receipts != nil {
 		receipts := iotextypes.Receipts{}
@@ -648,13 +650,33 @@ func (dao *blockDAO) putBlock(blk *block.Block) error {
 			log.L().Error("failed to serialize receipits for block", zap.Uint64("height", blkHeight))
 		}
 	}
+	var tipHeight uint64
+	tipHeightValue, err := kv.Get(blockNS, topHeightKey)
+	if err != nil {
+		tipHeight = 0
+	} else {
+		tipHeight = enc.MachineEndian.Uint64(tipHeightValue)
+	}
+	if blkHeight > tipHeight {
+		batchForBlock.Put(blockNS, tipHeightKey, heightValue, "failed to put top height")
+		batchForBlock.Put(blockNS, topHashKey, hash[:], "failed to put top hash")
+	}
+	return kv.Commit(batchForBlock)
+}
 
+// putBlock puts a block
+func (dao *blockDAO) putBlock(blk *block.Block) error {
+	if err := dao.putBlockForBlockdb(blk); err != nil {
+		return err
+	}
+
+	blkHeight := blk.Height()
 	hash := blk.HashBlock()
-	batch := db.NewBatch()
 	heightValue := byteutil.Uint64ToBytes(blkHeight)
-	hashKey := hashKey(hash)
+	heightKey := append(heightPrefix, heightValue...)
+	batch := db.NewBatch()
+	hashKey := append(hashPrefix, hash[:]...)
 	batch.Put(blockHashHeightMappingNS, hashKey, heightValue, "failed to put hash -> height mapping")
-	heightKey := heightKey(blkHeight)
 	batch.Put(blockHashHeightMappingNS, heightKey, hash[:], "failed to put height -> hash mapping")
 	tipHeight, err := dao.kvstore.Get(blockNS, topHeightKey)
 	if err != nil {
@@ -685,6 +707,7 @@ func (dao *blockDAO) deleteTipBlock() error {
 	}
 
 	batch := db.NewBatch()
+	batchForBlock := db.NewBatch()
 	whichDB, _, err := dao.getDBFromHeight(height)
 	if err != nil {
 		return err
@@ -699,7 +722,15 @@ func (dao *blockDAO) deleteTipBlock() error {
 			return err
 		}
 	}
-
+	if dao.headerCache != nil {
+		dao.headerCache.Remove(hash)
+	}
+	if dao.bodyCache != nil {
+		dao.bodyCache.Remove(hash)
+	}
+	if dao.footerCache != nil {
+		dao.footerCache.Remove(hash)
+	}
 	countingIndex, err = db.NewCountingIndexNX(whichDB, []byte(receiptsNS))
 	if err != nil {
 		return err
@@ -713,22 +744,26 @@ func (dao *blockDAO) deleteTipBlock() error {
 	// Delete hash -> height mapping
 	hashKey := hashKey(hash)
 	batch.Delete(blockHashHeightMappingNS, hashKey, "failed to delete hash -> height mapping")
-
+	heightKey := heightKey(height)
+	batchForBlock.Delete(blockHashHeightMappingNS, heightKey, "failed to delete height -> hash mapping")
 	// Delete height -> hash mapping
 	heightKey := heightKey(height)
 	batch.Delete(blockHashHeightMappingNS, heightKey, "failed to delete height -> hash mapping")
 
 	// Update tip height
 	batch.Put(blockNS, topHeightKey, byteutil.Uint64ToBytes(height-1), "failed to put top height")
-
+	batchForBlock.Put(blockNS, tipHeightKey, byteutil.Uint64ToBytes(height-1), "failed to put top height")
 	// Update tip hash
 	hash2, err := dao.getBlockHash(height - 1)
 	if err != nil {
 		return errors.Wrap(err, "failed to get tip block hash")
 	}
 	batch.Put(blockNS, topHashKey, hash2[:], "failed to put top hash")
-
-	return dao.kvstore.Commit(batch)
+	batchForBlock.Put(blockNS, topHashKey, hash2[:], "failed to put top hash")
+	if err := dao.kvstore.Commit(batch); err != nil {
+		return err
+	}
+	return whichDB.Commit(batchForBlock)
 }
 
 // getDBFromHash returns db of this block stored
@@ -741,9 +776,6 @@ func (dao *blockDAO) getDBFromHash(h hash.Hash256) (db.KVStore, uint64, error) {
 }
 
 func (dao *blockDAO) getTopDB(blkHeight uint64) (kvstore db.KVStore, index uint64, err error) {
-	if dao.cfg.SplitDBSizeMB == 0 || blkHeight <= dao.cfg.SplitDBHeight {
-		return dao.kvstore, 0, nil
-	}
 	topIndex := dao.topIndex.Load().(uint64)
 	file, dir := getFileNameAndDir(dao.cfg.DbPath)
 	if err != nil {
@@ -764,7 +796,7 @@ func (dao *blockDAO) getTopDB(blkHeight uint64) (kvstore db.KVStore, index uint6
 		return
 	}
 	// file exists,but need create new db
-	if uint64(dat.Size()) > dao.cfg.SplitDBSize() {
+	if dao.cfg.SplitDBSizeMB != 0 && uint64(dat.Size()) > dao.cfg.SplitDBSize() {
 		kvstore, index, err = dao.openDB(topIndex + 1)
 		dao.topIndex.Store(index)
 		// index the height --> file index mapping
@@ -786,12 +818,6 @@ func (dao *blockDAO) getTopDB(blkHeight uint64) (kvstore db.KVStore, index uint6
 }
 
 func (dao *blockDAO) getDBFromHeight(blkHeight uint64) (kvstore db.KVStore, index uint64, err error) {
-	if dao.cfg.SplitDBSizeMB == 0 {
-		return dao.kvstore, 0, nil
-	}
-	if blkHeight <= dao.cfg.SplitDBHeight {
-		return dao.kvstore, 0, nil
-	}
 	// get file index
 	value, err := dao.GetFileIndex(blkHeight)
 	if err != nil {
@@ -801,9 +827,6 @@ func (dao *blockDAO) getDBFromHeight(blkHeight uint64) (kvstore db.KVStore, inde
 }
 
 func (dao *blockDAO) getDBFromIndex(idx uint64) (kvstore db.KVStore, index uint64, err error) {
-	if idx == 0 {
-		return dao.kvstore, 0, nil
-	}
 	kv, ok := dao.kvstores.Load(idx)
 	if ok {
 		kvstore, ok = kv.(db.KVStore)
@@ -852,9 +875,6 @@ func (dao *blockDAO) getBlockValue(blockNS string, h hash.Hash256) ([]byte, erro
 
 // openDB open file if exists, or create new file
 func (dao *blockDAO) openDB(idx uint64) (kvstore db.KVStore, index uint64, err error) {
-	if idx == 0 {
-		return dao.kvstore, 0, nil
-	}
 	dao.mutex.Lock()
 	defer dao.mutex.Unlock()
 	cfg := dao.cfg
