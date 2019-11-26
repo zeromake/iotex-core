@@ -252,11 +252,7 @@ func (dao *blockDAO) GetBlock(hash hash.Hash256) (*block.Block, error) {
 }
 
 func (dao *blockDAO) GetBlockByHeight(height uint64) (*block.Block, error) {
-	hash, err := dao.getBlockHash(height)
-	if err != nil {
-		return nil, err
-	}
-	return dao.getBlock(hash)
+	return dao.getBlockByHeight(height)
 }
 
 func (dao *blockDAO) GetTipHash() (hash.Hash256, error) {
@@ -424,24 +420,57 @@ func (dao *blockDAO) getBlockHeight(hash hash.Hash256) (uint64, error) {
 
 // getBlock returns a block
 func (dao *blockDAO) getBlock(h hash.Hash256) (*block.Block, error) {
-	value, err := dao.getBlockValue(blockDataNS, h)
+	height, err := dao.getBlockHeight(h)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to get block header %x", h)
+		return nil, err
+	}
+	return dao.getBlockByHeight(height)
+}
+
+// getBlockByHeight returns a block by height
+func (dao *blockDAO) getBlockByHeight(height uint64) (*block.Block, error) {
+	whichDB, index, err := dao.getDBFromHeight(height)
+	if err != nil {
+		return nil, err
+	}
+	blkStore, err := db.NewCountingIndexNX(whichDB, []byte(blockDataNS))
+	if err != nil {
+		return nil, err
+	}
+	value, err := blkStore.Get(height)
+	if errors.Cause(err) == db.ErrNotExist {
+		idx := index - 1
+		if index == 0 {
+			idx = 0
+		}
+		dbs, _, err := dao.getDBFromIndex(idx)
+		if err != nil {
+			return nil, err
+		}
+		if blkStore, err = db.NewCountingIndexNX(dbs, []byte(blockDataNS)); err != nil {
+			return nil, err
+		}
+		if value, err = blkStore.Get(height); err != nil {
+			return nil, errors.Wrapf(err, "failed to get block %d", height)
+		}
+	}
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get block %d", height)
 	}
 	if dao.compressBlock {
 		timer := dao.timerFactory.NewTimer("decompress_header")
 		value, err = compress.Decompress(value)
 		timer.End()
 		if err != nil {
-			return nil, errors.Wrapf(err, "error when decompressing a block header %x", h)
+			return nil, errors.Wrapf(err, "error when decompressing a block %d", height)
 		}
 	}
 	if len(value) == 0 {
-		return nil, errors.Wrapf(db.ErrNotExist, "block header %x is missing", h)
+		return nil, errors.Wrapf(db.ErrNotExist, "block %d is missing", height)
 	}
 	blk := &block.Block{}
 	if err := blk.Deserialize(value); err != nil {
-		return nil, errors.Wrapf(err, "failed to deserialize block header %x", h)
+		return nil, errors.Wrapf(err, "failed to deserialize block %d", height)
 	}
 	return blk, nil
 }
