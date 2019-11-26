@@ -94,7 +94,9 @@ func (dao *blockDAO) migrate() error {
 		if err != nil {
 			return err
 		}
-		log.L().Info("putBlock:", zap.Uint64("height", i))
+		if i%100 == 0 {
+			log.L().Info("putBlock:", zap.Uint64("height", i))
+		}
 	}
 	return nil
 }
