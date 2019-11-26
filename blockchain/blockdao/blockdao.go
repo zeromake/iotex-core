@@ -58,7 +58,6 @@ const (
 
 var (
 	topHeightKey       = []byte("th")
-	tipHeightKey       = []byte("tih")
 	startHeightKey     = []byte("sh")
 	topHashKey         = []byte("ts")
 	hashPrefix         = []byte("ha.")
@@ -184,35 +183,36 @@ func (dao *blockDAO) Start(ctx context.Context) error {
 }
 
 func (dao *blockDAO) adjust() error {
-	tipHeight, err := dao.getTipHeight()
+	topHeight, err := dao.getTopHeight()
 	if err != nil {
 		return err
 	}
-	if tipHeight == 0 {
+	if topHeight == 0 {
 		return nil
 	}
-	topDB, _, err := dao.getTopDB(tipHeight)
+	topDB, index, err := dao.getTopDB(topHeight)
 	if err != nil {
 		return err
 	}
-	value, err := topDB.Get(blockNS, tipHeightKey)
+	value, err := topDB.Get(blockNS, topHeightKey)
 	if err != nil {
 		return err
 	}
 	topHeightOfBlockDB := enc.MachineEndian.Uint64(value)
-	if tipHeight == topHeightOfBlockDB {
+	if topHeight == topHeightOfBlockDB {
 		return nil
-	} else if tipHeight > topHeightOfBlockDB {
+	} else if topHeight > topHeightOfBlockDB {
 		return ErrMissingBlock
 	}
-	return dao.revert(tipHeight+1, topHeightOfBlockDB, topDB)
+	return dao.revert(topHeight+1, topHeightOfBlockDB, topDB, index)
 }
 
-func (dao *blockDAO) revert(from, to uint64, store db.KVStore) (err error) {
+func (dao *blockDAO) revert(from, to uint64, store db.KVStore, index uint64) (err error) {
+	indexValue := byteutil.Uint64ToBytesBigEndian(index)
 	batch := db.NewBatch()
 	for i := from; i <= to; i++ {
 		heightValue := byteutil.Uint64ToBytes(i)
-		heightKey := append(heightPrefix, heightValue...)
+		heightKey := heightKey(i)
 		hash, err := store.Get(blockHashHeightMappingNS, heightKey)
 		if err != nil {
 			return err
@@ -222,6 +222,10 @@ func (dao *blockDAO) revert(from, to uint64, store db.KVStore) (err error) {
 		batch.Put(blockHashHeightMappingNS, heightKey, hash, "failed to put height -> hash mapping")
 		batch.Put(blockNS, topHeightKey, heightValue, "failed to put top height")
 		batch.Put(blockNS, topHashKey, hash, "failed to put top hash")
+		err = dao.IndexFile(i, indexValue)
+		if err != nil {
+			return err
+		}
 	}
 	return dao.kvstore.Commit(batch)
 }
@@ -306,11 +310,11 @@ func (dao *blockDAO) GetBlockByHeight(height uint64) (*block.Block, error) {
 }
 
 func (dao *blockDAO) GetTipHash() (hash.Hash256, error) {
-	return dao.getTipHash()
+	return dao.getTopHash()
 }
 
 func (dao *blockDAO) GetTipHeight() (uint64, error) {
-	return dao.getTipHeight()
+	return dao.getTopHeight()
 }
 
 func (dao *blockDAO) Header(h hash.Hash256) (*block.Header, error) {
@@ -376,13 +380,13 @@ func (dao *blockDAO) PutBlock(blk *block.Block) error {
 func (dao *blockDAO) DeleteBlockToTarget(targetHeight uint64) error {
 	dao.mutex.Lock()
 	defer dao.mutex.Unlock()
-	tipHeight, err := dao.getTipHeight()
+	tipHeight, err := dao.getTopHeight()
 	if err != nil {
 		return err
 	}
 	for tipHeight > targetHeight {
 		// Obtain tip block hash
-		h, err := dao.getTipHash()
+		h, err := dao.getTopHash()
 		if err != nil {
 			return errors.Wrap(err, "failed to get tip block hash")
 		}
@@ -549,8 +553,8 @@ func (dao *blockDAO) footer(h hash.Hash256) (*block.Footer, error) {
 	return &blk.Footer, nil
 }
 
-// getTipHeight returns the blockchain height
-func (dao *blockDAO) getTipHeight() (uint64, error) {
+// getTopHeight returns the blockchain height
+func (dao *blockDAO) getTopHeight() (uint64, error) {
 	value, err := dao.kvstore.Get(blockNS, topHeightKey)
 	if err != nil {
 		return 0, errors.Wrap(err, "failed to get top height")
@@ -562,7 +566,7 @@ func (dao *blockDAO) getTipHeight() (uint64, error) {
 }
 
 // getTipHash returns the blockchain tip hash
-func (dao *blockDAO) getTipHash() (hash.Hash256, error) {
+func (dao *blockDAO) getTopHash() (hash.Hash256, error) {
 	value, err := dao.kvstore.Get(blockNS, topHashKey)
 	if err != nil {
 		return hash.ZeroHash256, errors.Wrap(err, "failed to get tip hash")
@@ -614,7 +618,7 @@ func (dao *blockDAO) putBlockForBlockdb(blk *block.Block) error {
 	batchForBlock := db.NewBatch()
 	_, err = kv.Get(blockNS, startHeightKey)
 	if err != nil && errors.Cause(err) == db.ErrNotExist {
-		batchForBlock.Put(blockNS, startHeightKey, heightValue, "failed to put block header")
+		batchForBlock.Put(blockNS, startHeightKey, heightValue, "failed to put start height key")
 	}
 	serBlk, err := blk.Serialize()
 	if err != nil {
@@ -658,15 +662,15 @@ func (dao *blockDAO) putBlockForBlockdb(blk *block.Block) error {
 			log.L().Error("failed to serialize receipits for block", zap.Uint64("height", blkHeight))
 		}
 	}
-	var tipHeight uint64
-	tipHeightValue, err := kv.Get(blockNS, topHeightKey)
+	var topHeight uint64
+	topHeightValue, err := kv.Get(blockNS, topHeightKey)
 	if err != nil {
-		tipHeight = 0
+		topHeight = 0
 	} else {
-		tipHeight = enc.MachineEndian.Uint64(tipHeightValue)
+		topHeight = enc.MachineEndian.Uint64(topHeightValue)
 	}
-	if blkHeight > tipHeight {
-		batchForBlock.Put(blockNS, tipHeightKey, heightValue, "failed to put top height")
+	if blkHeight > topHeight {
+		batchForBlock.Put(blockNS, topHeightKey, heightValue, "failed to put top height")
 		batchForBlock.Put(blockNS, topHashKey, h[:], "failed to put top hash")
 	}
 	return kv.Commit(batchForBlock)
@@ -686,11 +690,11 @@ func (dao *blockDAO) putBlock(blk *block.Block) error {
 	hashKey := append(hashPrefix, hash[:]...)
 	batch.Put(blockHashHeightMappingNS, hashKey, heightValue, "failed to put hash -> height mapping")
 	batch.Put(blockHashHeightMappingNS, heightKey, hash[:], "failed to put height -> hash mapping")
-	tipHeight, err := dao.kvstore.Get(blockNS, topHeightKey)
+	topHeight, err := dao.kvstore.Get(blockNS, topHeightKey)
 	if err != nil {
 		return errors.Wrap(err, "failed to get top height")
 	}
-	if blkHeight > enc.MachineEndian.Uint64(tipHeight) {
+	if blkHeight > enc.MachineEndian.Uint64(topHeight) {
 		batch.Put(blockNS, topHeightKey, heightValue, "failed to put top height")
 		batch.Put(blockNS, topHashKey, hash[:], "failed to put top hash")
 	}
@@ -700,7 +704,7 @@ func (dao *blockDAO) putBlock(blk *block.Block) error {
 // deleteTipBlock deletes the tip block
 func (dao *blockDAO) deleteTipBlock() error {
 	// First obtain tip height from db
-	height, err := dao.getTipHeight()
+	height, err := dao.getTopHeight()
 	if err != nil {
 		return errors.Wrap(err, "failed to get tip height")
 	}
@@ -709,7 +713,7 @@ func (dao *blockDAO) deleteTipBlock() error {
 		return errors.New("cannot delete genesis block")
 	}
 	// Obtain tip block hash
-	hash, err := dao.getTipHash()
+	hash, err := dao.getTopHash()
 	if err != nil {
 		return errors.Wrap(err, "failed to get tip block hash")
 	}
@@ -759,7 +763,7 @@ func (dao *blockDAO) deleteTipBlock() error {
 
 	// Update tip height
 	batch.Put(blockNS, topHeightKey, byteutil.Uint64ToBytes(height-1), "failed to put top height")
-	batchForBlock.Put(blockNS, tipHeightKey, byteutil.Uint64ToBytes(height-1), "failed to put top height")
+	batchForBlock.Put(blockNS, topHeightKey, byteutil.Uint64ToBytes(height-1), "failed to put top height")
 	// Update tip hash
 	hash2, err := dao.getBlockHash(height - 1)
 	if err != nil {
