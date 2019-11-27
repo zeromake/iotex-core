@@ -56,6 +56,15 @@ const (
 	transferAmountNS                 = "tfa"
 )
 
+// these NS belong to old DB before migrating to storage optimization
+// they are left here only for record
+// do NOT use them in the future to avoid potential conflict
+const (
+	blockHeaderNS = "bhr"
+	blockBodyNS   = "bbd"
+	blockFooterNS = "bfr"
+)
+
 var (
 	topHeightKey       = []byte("th")
 	topHashKey         = []byte("ts")
@@ -101,6 +110,11 @@ type (
 		IndexFile(uint64, []byte) error
 		GetFileIndex(uint64) ([]byte, error)
 		KVStore() db.KVStore
+		// used for DB migration to storage optimization
+		// TODO: delete this and blockdao_legacy.go after reasonably long period of time passed DB migration
+		GetBlockByHeightLegacy(uint64) (*block.Block, error)
+		PutBlockForMigration(*block.Block) error
+		CommitForMigration() error
 	}
 
 	// BlockIndexer defines an interface to accept block to build index
@@ -116,6 +130,8 @@ type (
 		compressBlock bool
 		kvstore       db.KVStore
 		indexer       BlockIndexer
+		blockData     db.CountingIndex
+		receipt       db.CountingIndex
 		htf           db.RangeIndex
 		kvstores      sync.Map //store like map[index]db.KVStore,index from 1...N
 		topIndex      atomic.Value
@@ -126,6 +142,7 @@ type (
 		footerCache   *cache.ThreadSafeLruCache
 		cfg           config.DB
 		mutex         sync.RWMutex // for create new db file
+		batch         db.KVStoreBatch
 	}
 )
 
@@ -171,6 +188,9 @@ func (dao *blockDAO) Start(ctx context.Context) error {
 		if err := dao.kvstore.Put(blockNS, topHeightKey, make([]byte, 8)); err != nil {
 			return errors.Wrap(err, "failed to write initial value for top height")
 		}
+	}
+	if err = dao.initMigration(); err != nil {
+		return err
 	}
 	if err = dao.initStores(); err != nil {
 		return err
@@ -712,15 +732,6 @@ func (dao *blockDAO) deleteTipBlock() error {
 	return dao.kvstore.Commit(batch)
 }
 
-// getDBFromHash returns db of this block stored
-func (dao *blockDAO) getDBFromHash(h hash.Hash256) (db.KVStore, uint64, error) {
-	height, err := dao.getBlockHeight(h)
-	if err != nil {
-		return nil, 0, err
-	}
-	return dao.getDBFromHeight(height)
-}
-
 func (dao *blockDAO) getTopDB(blkHeight uint64) (kvstore db.KVStore, index uint64, err error) {
 	if dao.cfg.SplitDBSizeMB == 0 || blkHeight <= dao.cfg.SplitDBHeight {
 		return dao.kvstore, 0, nil
@@ -796,30 +807,6 @@ func (dao *blockDAO) getDBFromIndex(idx uint64) (kvstore db.KVStore, index uint6
 	}
 	// if user rm some db files manully,then call this method will create new file
 	return dao.openDB(idx)
-}
-
-// getBlockValue get block's data from db,if this db failed,it will try the previous one
-func (dao *blockDAO) getBlockValue(blockNS string, h hash.Hash256) ([]byte, error) {
-	whichDB, index, err := dao.getDBFromHash(h)
-	if err != nil {
-		return nil, err
-	}
-	value, err := whichDB.Get(blockNS, h[:])
-	if errors.Cause(err) == db.ErrNotExist {
-		idx := index - 1
-		if index == 0 {
-			idx = 0
-		}
-		db, _, err := dao.getDBFromIndex(idx)
-		if err != nil {
-			return nil, err
-		}
-		value, err = db.Get(blockNS, h[:])
-		if err != nil {
-			return nil, err
-		}
-	}
-	return value, err
 }
 
 // openDB open file if exists, or create new file
