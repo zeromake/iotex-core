@@ -39,10 +39,7 @@ const (
 
 var (
 	tipHeightKey = []byte("th")
-)
-
-var (
-	pattern = "-00000000.db"
+	pattern      = "-00000000.db"
 )
 
 func (dao *blockDAO) checkLegacyDB() error {
@@ -128,7 +125,7 @@ func (dao *blockDAO) migrate() error {
 			log.L().Info("putBlock:", zap.Uint64("height", i))
 		}
 	}
-	return nil
+	return os.Remove(path.Dir(dao.cfg.DbPath) + "/oldchain.db")
 }
 
 func (dao *blockDAO) commitAndRefresh(height uint64, batch, blockBatch db.KVStoreBatch, kv db.KVStore) (kvForBlockData db.KVStore, err error) {
