@@ -32,8 +32,12 @@ import (
 )
 
 const (
-	// AccountKVNameSpace is the bucket name for account trie
-	AccountKVNameSpace = "Account"
+	// AccountKVNamespace is the bucket name for account trie
+	AccountKVNamespace = "Account"
+	// AccountTrieNamespace is the bucket for the latest state view
+	AccountTrieNamespace = "AccountTrie"
+	// ArchiveNamespacePrefix is the prefix of the buckets storing history data
+	ArchiveNamespacePrefix = "Archive"
 	// CurrentHeightKey indicates the key of current factory height in underlying DB
 	CurrentHeightKey = "currentHeight"
 	// AccountTrieRootKey indicates the key of accountTrie root hash in underlying DB
@@ -65,7 +69,7 @@ type (
 		cfg                config.Config
 		currentChainHeight uint64
 		saveHistory        bool
-		accountTrie        trie.Trie  // global state trie
+		accountTrie        trie.Trie  // global state trie, this is a read only trie
 		dao                db.KVStore // the underlying DB for account/contract storage
 		timerFactory       *prometheustimer.TimerFactory
 	}
@@ -120,7 +124,8 @@ func NewFactory(cfg config.Config, opts ...Option) (Factory, error) {
 			return nil, err
 		}
 	}
-	dbForTrie, err := db.NewKVStoreForTrie(AccountKVNameSpace, evm.PruneKVNameSpace, sf.dao)
+	// The sf.dao passed into the dbForTrie could be read only
+	dbForTrie, err := db.NewKVStoreForTrie(AccountTrieNamespace, sf.dao)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create db for trie")
 	}
@@ -152,7 +157,7 @@ func (sf *factory) Start(ctx context.Context) error {
 		return err
 	}
 	// check factory height
-	_, err := sf.dao.Get(AccountKVNameSpace, []byte(CurrentHeightKey))
+	_, err := sf.dao.Get(AccountKVNamespace, []byte(CurrentHeightKey))
 	switch errors.Cause(err) {
 	case nil:
 		break
@@ -176,14 +181,11 @@ func (sf *factory) Stop(ctx context.Context) error {
 	return sf.lifecycle.OnStop(ctx)
 }
 
-//======================================
-// account functions
-//======================================
 // Height returns factory's height
 func (sf *factory) Height() (uint64, error) {
 	sf.mutex.RLock()
 	defer sf.mutex.RUnlock()
-	height, err := sf.dao.Get(AccountKVNameSpace, []byte(CurrentHeightKey))
+	height, err := sf.dao.Get(AccountKVNamespace, []byte(CurrentHeightKey))
 	if err != nil {
 		return 0, errors.Wrap(err, "failed to get factory's height from underlying DB")
 	}
