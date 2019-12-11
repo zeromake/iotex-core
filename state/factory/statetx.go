@@ -8,6 +8,7 @@ package factory
 
 import (
 	"context"
+	"github.com/iotexproject/iotex-core/blockchain/genesis"
 
 	"github.com/pkg/errors"
 
@@ -39,13 +40,14 @@ func newStateTX(
 	kv db.KVStore,
 	actionHandlers []protocol.ActionHandler,
 	store asql.Store,
+	genesis genesis.Genesis,
 ) *stateTX {
 	return &stateTX{
 		ver:            version,
 		cb:             db.NewCachedBatch(),
 		dao:            kv,
 		actionHandlers: actionHandlers,
-		st:             tracker.New(store),
+		st:             tracker.New(store, genesis),
 	}
 }
 

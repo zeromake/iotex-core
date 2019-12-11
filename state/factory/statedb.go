@@ -9,6 +9,7 @@ package factory
 import (
 	"context"
 	"fmt"
+	"github.com/iotexproject/iotex-core/blockchain/genesis"
 	"math/big"
 	"os"
 	"strconv"
@@ -40,6 +41,7 @@ type stateDB struct {
 	actionHandlers     []protocol.ActionHandler // the handlers to handle actions
 	timerFactory       *prometheustimer.TimerFactory
 	store              asql.Store
+	genesis            genesis.Genesis
 }
 
 // StateDBOption sets stateDB construction parameter
@@ -76,6 +78,7 @@ func DefaultStateDBOption() StateDBOption {
 			dbName = "analytics"
 		}
 		sdb.store = asql.NewMySQL(connectionStr, dbName)
+		sdb.genesis = cfg.Genesis
 		return nil
 	}
 }
@@ -119,7 +122,7 @@ func (sdb *stateDB) Start(ctx context.Context) error {
 	if err := sdb.store.Start(ctx); err != nil {
 		return errors.Wrap(err, "failed to start state tracker store")
 	}
-	if err := tracker.InitStore(sdb.store); err != nil {
+	if err := tracker.InitStore(sdb.genesis, sdb.store); err != nil {
 		return errors.Wrap(err, "failed to init state tracker store")
 	}
 	return sdb.dao.Start(ctx)
@@ -195,7 +198,7 @@ func (sdb *stateDB) Height() (uint64, error) {
 func (sdb *stateDB) NewWorkingSet() (WorkingSet, error) {
 	sdb.mutex.RLock()
 	defer sdb.mutex.RUnlock()
-	return newStateTX(sdb.currentChainHeight, sdb.dao, sdb.actionHandlers, sdb.store), nil
+	return newStateTX(sdb.currentChainHeight, sdb.dao, sdb.actionHandlers, sdb.store, sdb.genesis), nil
 }
 
 // Commit persists all changes in RunActions() into the DB
