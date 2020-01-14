@@ -9,6 +9,8 @@ package blockindex
 import (
 	"bytes"
 	"context"
+	"github.com/iotexproject/iotex-core/pkg/log"
+	"go.uber.org/zap"
 	"math/big"
 	"sync"
 
@@ -130,6 +132,8 @@ func (x *blockIndexer) Commit() error {
 func (x *blockIndexer) PutBlock(blk *block.Block) error {
 	x.mutex.Lock()
 	defer x.mutex.Unlock()
+
+	log.L().Info("@@@@@@@ Receive block", zap.Uint64("height", blk.Height()))
 
 	// the block to be indexed must be exactly current top + 1, otherwise counting index would not work correctly
 	height := blk.Height()
@@ -341,11 +345,14 @@ func (x *blockIndexer) commit() error {
 	}
 	// total block and total action index
 	if err := x.tbk.Commit(); err != nil {
+		log.L().Info("??????? commit block error")
 		return err
 	}
 	if err := x.tac.Commit(); err != nil {
+		log.L().Info("??????? commit action error")
 		return err
 	}
+	log.L().Info("+++++++ commit index", zap.Uint64("tbk", x.tbk.Size()))
 	return x.kvstore.WriteBatch(x.batch)
 }
 
